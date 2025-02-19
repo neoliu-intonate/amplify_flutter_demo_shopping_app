@@ -1,0 +1,11 @@
+{
+  "AppSyncApiName": "demoshoppingapp",
+  "DynamoDBBillingMode": "PAY_PER_REQUEST",
+  "DynamoDBEnableServerSideEncryption": false,
+  "AuthCognitoUserPoolId": {
+    "Fn::GetAtt": [
+      "authdemoshoppingapp64d82b22",
+      "Outputs.UserPoolId"
+    ]
+  }
+}

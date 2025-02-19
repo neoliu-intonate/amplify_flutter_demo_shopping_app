@@ -8,6 +8,9 @@ import 'package:go_router/go_router.dart';
 import 'amplifyconfiguration.dart';
 import 'models/ModelProvider.dart';
 
+// Global RouteObserver to monitor route changes
+final RouteObserver<PageRoute> routeObserver = RouteObserver<PageRoute>();
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await _configureAmplify();
@@ -15,24 +18,15 @@ Future<void> main() async {
 }
 
 Future<void> _configureAmplify() async {
-  // To be filled in
   try {
-    // Create the API plugin.
-    //
-    // If `ModelProvider.instance` is not available, try running
-    // `amplify codegen models` from the root of your project.
     final api = AmplifyAPI(
-        options: APIPluginOptions(modelProvider: ModelProvider.instance));
-
-    // Create the Auth plugin.
+      options: APIPluginOptions(modelProvider: ModelProvider.instance),
+    );
     final auth = AmplifyAuthCognito();
-
-    // Add the plugins and configure Amplify for your app.
     await Amplify.addPlugins([api, auth]);
     await Amplify.configure(amplifyconfig);
-
-    safePrint('Successfully configured');
-  } on Exception catch (e) {
+    safePrint('Successfully configured Amplify');
+  } catch (e) {
     safePrint('Error configuring Amplify: $e');
   }
 }
@@ -40,12 +34,36 @@ Future<void> _configureAmplify() async {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // GoRouter configuration
+  // GoRouter configuration with routes for product list, detail, cart, and management.
+  // Note: We pass our routeObserver in the observers parameter of GoRouter.
   static final _router = GoRouter(
+    observers: [routeObserver],
     routes: [
       GoRoute(
         path: '/',
-        builder: (context, state) => const HomeScreen(),
+        name: 'product_list',
+        builder: (context, state) => const ProductListPage(),
+      ),
+      GoRoute(
+        path: '/product',
+        name: 'product_detail',
+        builder: (context, state) {
+          final product = state.extra as Product;
+          return ProductDetailPage(product: product);
+        },
+      ),
+      GoRoute(
+        path: '/cart',
+        name: 'cart',
+        builder: (context, state) => const CartPage(),
+      ),
+      GoRoute(
+        path: '/manage',
+        name: 'manage_product',
+        builder: (context, state) {
+          final product = state.extra as Product?;
+          return ManageProductScreen(product: product);
+        },
       ),
     ],
   );
@@ -62,272 +80,441 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class LoadingScreen extends StatelessWidget {
-  const LoadingScreen({super.key});
+/// -------------------------------------------------------------------------
+/// Shopping Cart Models (in‑memory)
+/// -------------------------------------------------------------------------
 
-  @override
-  Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(
-        child: CircularProgressIndicator(),
-      ),
-    );
+class CartItem {
+  final Product product;
+  int quantity;
+
+  CartItem({required this.product, this.quantity = 1});
+}
+
+class ShoppingCart {
+  static final ShoppingCart instance = ShoppingCart._internal();
+  ShoppingCart._internal();
+
+  final Map<String, CartItem> items = {};
+
+  void addProduct(Product product) {
+    final id = product.id;
+    if (items.containsKey(id)) {
+      items[id]!.quantity++;
+    } else {
+      items[id] = CartItem(product: product, quantity: 1);
+    }
   }
+
+  void removeProduct(Product product) {
+    final id = product.id;
+    if (items.containsKey(id)) {
+      if (items[id]!.quantity > 1) {
+        items[id]!.quantity--;
+      } else {
+        items.remove(id);
+      }
+    }
+  }
+
+  void clear() {
+    items.clear();
+  }
+
+  List<CartItem> getItems() => items.values.toList();
 }
 
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+/// -------------------------------------------------------------------------
+/// Product List Page
+/// -------------------------------------------------------------------------
+
+class ProductListPage extends StatefulWidget {
+  const ProductListPage({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<ProductListPage> createState() => _ProductListPageState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  var _budgetEntries = <BudgetEntry>[];
+class _ProductListPageState extends State<ProductListPage> with RouteAware {
+  List<Product> _products = [];
 
   @override
   void initState() {
     super.initState();
-    _refreshBudgetEntries();
+    _refreshProducts();
   }
 
-  Future<void> _refreshBudgetEntries() async {
-    // To be filled in
-    try {
-      final request = ModelQueries.list(BudgetEntry.classType);
-      final response = await Amplify.API.query(request: request).response;
+  // Subscribe to the route observer when dependencies change.
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) {
+      routeObserver.subscribe(this, route);
+    }
+  }
 
-      final todos = response.data?.items;
+  // Called when this route has been popped back to (i.e. becomes visible).
+  @override
+  void didPopNext() {
+    _refreshProducts();
+  }
+
+  @override
+  void dispose() {
+    routeObserver.unsubscribe(this);
+    super.dispose();
+  }
+
+  Future<void> _refreshProducts() async {
+    try {
+      final request = ModelQueries.list(Product.classType);
+      final response = await Amplify.API.query(request: request).response;
       if (response.hasErrors) {
-        safePrint('errors: ${response.errors}');
+        safePrint('Errors: ${response.errors}');
         return;
       }
+      final products = response.data?.items.whereType<Product>().toList() ?? [];
       setState(() {
-        _budgetEntries = todos!.whereType<BudgetEntry>().toList();
+        _products = products;
       });
-    } on ApiException catch (e) {
+    } catch (e) {
       safePrint('Query failed: $e');
     }
   }
 
-  Future<void> _deleteBudgetEntry(BudgetEntry budgetEntry) async {
-    // To be filled in
-    final request = ModelMutations.delete<BudgetEntry>(budgetEntry);
-    final response = await Amplify.API.mutate(request: request).response;
-    safePrint('Delete response: $response');
-    await _refreshBudgetEntries();
+  void _addToCart(Product product) {
+    ShoppingCart.instance.addProduct(product);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${product.name} added to cart')),
+    );
   }
 
-  Future<void> _navigateToBudgetEntry({BudgetEntry? budgetEntry}) async {
-    // To be filled in
-    await context.pushNamed('manage', extra: budgetEntry);
-    await _refreshBudgetEntries();
-  }
-
-  double _calculateTotalBudget(List<BudgetEntry?> items) {
-    var totalAmount = 0.0;
-    for (final item in items) {
-      totalAmount += item?.amount ?? 0;
-    }
-    return totalAmount;
-  }
-
-  Widget _buildRow({
-    required String title,
-    required String description,
-    required String amount,
-    TextStyle? style,
-  }) {
-    return Row(
-      children: [
-        Expanded(
-          child: Text(
-            title,
-            textAlign: TextAlign.center,
-            style: style,
+  Widget _buildRow(Product product) {
+    return ListTile(
+      title: Row(
+        children: [
+          Expanded(child: Text(product.name)),
+          Expanded(child: Text('Stock: ${product.stock}')),
+          Expanded(child: Text('\$ ${product.price.toStringAsFixed(2)}')),
+          IconButton(
+            icon: const Icon(Icons.add_shopping_cart),
+            onPressed: () => _addToCart(product),
           ),
-        ),
-        Expanded(
-          child: Text(
-            description,
-            textAlign: TextAlign.center,
-            style: style,
-          ),
-        ),
-        Expanded(
-          child: Text(
-            amount,
-            textAlign: TextAlign.center,
-            style: style,
-          ),
-        ),
-      ],
+        ],
+      ),
+      onTap: () {
+        context.pushNamed('product_detail', extra: product);
+      },
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        title: const Text('Products'),
+        actions: [
+          // Button to navigate to the shopping cart page
+          IconButton(
+            icon: const Icon(Icons.shopping_cart),
+            onPressed: () => context.pushNamed('cart'),
+          ),
+        ],
+      ),
+      // Floating button for product owners to add new products
       floatingActionButton: FloatingActionButton(
-        // Navigate to the page to create new budget entries
-        onPressed: _navigateToBudgetEntry,
+        onPressed: () {
+          context.pushNamed('manage_product', extra: null);
+        },
         child: const Icon(Icons.add),
       ),
-      appBar: AppBar(
-        title: const Text('Budget Tracker'),
-      ),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.only(top: 25),
-          child: RefreshIndicator(
-            onRefresh: _refreshBudgetEntries,
-            child: Column(
-              children: [
-                if (_budgetEntries.isEmpty)
-                  const Text('Use the \u002b sign to add new budget entries')
-                else
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      // Show total budget from the list of all BudgetEntries
-                      Text(
-                        'Total Budget: \$ ${_calculateTotalBudget(_budgetEntries).toStringAsFixed(2)}',
-                        style: const TextStyle(fontSize: 24),
-                      )
-                    ],
-                  ),
-                const SizedBox(height: 30),
-                _buildRow(
-                  title: 'Title',
-                  description: 'Description',
-                  amount: 'Amount',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const Divider(),
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: _budgetEntries.length,
-                    itemBuilder: (context, index) {
-                      final budgetEntry = _budgetEntries[index];
-                      return Dismissible(
-                        key: ValueKey(budgetEntry),
-                        background: const ColoredBox(
-                          color: Colors.red,
-                          child: Padding(
-                            padding: EdgeInsets.only(right: 10),
-                            child: Align(
-                              alignment: Alignment.centerRight,
-                              child: Icon(Icons.delete, color: Colors.white),
-                            ),
-                          ),
-                        ),
-                        onDismissed: (_) => _deleteBudgetEntry(budgetEntry),
-                        child: ListTile(
-                          onTap: () => _navigateToBudgetEntry(
-                            budgetEntry: budgetEntry,
-                          ),
-                          title: _buildRow(
-                            title: budgetEntry.title,
-                            description: budgetEntry.description ?? '',
-                            amount:
-                                '\$ ${budgetEntry.amount.toStringAsFixed(2)}',
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
+      body: RefreshIndicator(
+        onRefresh: _refreshProducts,
+        child: ListView.separated(
+          itemCount: _products.length,
+          separatorBuilder: (context, index) => const Divider(),
+          itemBuilder: (context, index) {
+            final product = _products[index];
+            return _buildRow(product);
+          },
         ),
       ),
     );
   }
 }
 
-class ManageBudgetEntryScreen extends StatefulWidget {
-  const ManageBudgetEntryScreen({
-    required this.budgetEntry,
-    super.key,
-  });
+/// -------------------------------------------------------------------------
+/// Product Detail Page
+/// -------------------------------------------------------------------------
 
-  final BudgetEntry? budgetEntry;
+class ProductDetailPage extends StatelessWidget {
+  final Product product;
+
+  const ProductDetailPage({super.key, required this.product});
 
   @override
-  State<ManageBudgetEntryScreen> createState() =>
-      _ManageBudgetEntryScreenState();
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(product.name),
+        actions: [
+          // Allow the owner to navigate to the manage page to edit the product
+          IconButton(
+            icon: const Icon(Icons.edit),
+            onPressed: () {
+              context.pushNamed('manage_product', extra: product);
+            },
+          ),
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Name: ${product.name}',
+                style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: 10),
+            Text('Description: ${product.description ?? 'No description'}'),
+            const SizedBox(height: 10),
+            Text('Stock: ${product.stock}'),
+            const SizedBox(height: 10),
+            Text('Price: \$ ${product.price.toStringAsFixed(2)}'),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.add_shopping_cart),
+              label: const Text('Add to Cart'),
+              onPressed: () {
+                ShoppingCart.instance.addProduct(product);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('${product.name} added to cart')),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
-class _ManageBudgetEntryScreenState extends State<ManageBudgetEntryScreen> {
+/// -------------------------------------------------------------------------
+/// Cart Page
+/// -------------------------------------------------------------------------
+
+class CartPage extends StatefulWidget {
+  const CartPage({super.key});
+
+  @override
+  State<CartPage> createState() => _CartPageState();
+}
+
+class _CartPageState extends State<CartPage> {
+  bool _isPlacingOrder = false;
+
+  Future<void> _placeOrder() async {
+    setState(() {
+      _isPlacingOrder = true;
+    });
+
+    final cartItems = ShoppingCart.instance.getItems();
+
+    // Check if there is enough stock for each cart item
+    for (final item in cartItems) {
+      if (item.quantity > item.product.stock) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Not enough stock for ${item.product.name}')),
+        );
+        setState(() {
+          _isPlacingOrder = false;
+        });
+        return;
+      }
+    }
+
+    // Deduct the ordered quantity from the product stock and update the product
+    for (final item in cartItems) {
+      final updatedStock = item.product.stock - item.quantity;
+      final updatedProduct = item.product.copyWith(stock: updatedStock);
+      try {
+        final request = ModelMutations.update(updatedProduct);
+        final response = await Amplify.API.mutate(request: request).response;
+        if (response.hasErrors) {
+          safePrint('Error updating product: ${response.errors}');
+        } else {
+          safePrint(
+              'Updated product ${item.product.name} stock to $updatedStock');
+        }
+      } catch (e) {
+        safePrint('Update failed: $e');
+      }
+    }
+
+    // Clear the cart after a successful order
+    ShoppingCart.instance.clear();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Order placed successfully')),
+    );
+
+    setState(() {
+      _isPlacingOrder = false;
+    });
+
+    // Optionally, navigate back to the product list
+    if (mounted) {
+      context.pop();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cartItems = ShoppingCart.instance.getItems();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Shopping Cart'),
+      ),
+      body: cartItems.isEmpty
+          ? const Center(child: Text('Your cart is empty'))
+          : ListView.separated(
+              itemCount: cartItems.length,
+              separatorBuilder: (context, index) => const Divider(),
+              itemBuilder: (context, index) {
+                final item = cartItems[index];
+                return ListTile(
+                  title: Text(item.product.name),
+                  subtitle: Text('Quantity: ${item.quantity}'),
+                  trailing: Text(
+                    '\$ ${(item.product.price * item.quantity).toStringAsFixed(2)}',
+                  ),
+                );
+              },
+            ),
+      bottomNavigationBar: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: ElevatedButton(
+          onPressed: _isPlacingOrder ? null : _placeOrder,
+          child: _isPlacingOrder
+              ? const CircularProgressIndicator()
+              : const Text('Place Order'),
+        ),
+      ),
+    );
+  }
+}
+
+/// -------------------------------------------------------------------------
+/// Manage Product Screen (Create / Update)
+/// -------------------------------------------------------------------------
+class ManageProductScreen extends StatefulWidget {
+  final Product? product;
+  const ManageProductScreen({super.key, this.product});
+
+  @override
+  State<ManageProductScreen> createState() => _ManageProductScreenState();
+}
+
+class _ManageProductScreenState extends State<ManageProductScreen> {
   final _formKey = GlobalKey<FormState>();
-  final TextEditingController _titleController = TextEditingController();
+  final TextEditingController _nameController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
-  final TextEditingController _amountController = TextEditingController();
+  final TextEditingController _stockController = TextEditingController();
+  final TextEditingController _priceController = TextEditingController();
 
   late final String _titleText;
-
-  bool get _isCreate => _budgetEntry == null;
-  BudgetEntry? get _budgetEntry => widget.budgetEntry;
+  bool get _isCreate => widget.product == null;
 
   @override
   void initState() {
     super.initState();
-
-    final budgetEntry = _budgetEntry;
-    if (budgetEntry != null) {
-      _titleController.text = budgetEntry.title;
-      _descriptionController.text = budgetEntry.description ?? '';
-      _amountController.text = budgetEntry.amount.toStringAsFixed(2);
-      _titleText = 'Update budget entry';
+    if (widget.product != null) {
+      _nameController.text = widget.product!.name;
+      _descriptionController.text = widget.product!.description ?? '';
+      _stockController.text = widget.product!.stock.toString();
+      _priceController.text = widget.product!.price.toStringAsFixed(2);
+      _titleText = 'Update Product';
     } else {
-      _titleText = 'Create budget entry';
+      _titleText = 'Create Product';
     }
   }
 
   @override
   void dispose() {
-    _titleController.dispose();
+    _nameController.dispose();
     _descriptionController.dispose();
-    _amountController.dispose();
+    _stockController.dispose();
+    _priceController.dispose();
     super.dispose();
   }
 
   Future<void> submitForm() async {
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
+    if (!_formKey.currentState!.validate()) return;
 
-    // If the form is valid, submit the data
-    final title = _titleController.text;
+    final name = _nameController.text;
     final description = _descriptionController.text;
-    final amount = double.parse(_amountController.text);
+    final stock = int.parse(_stockController.text);
+    final price = double.parse(_priceController.text);
 
     if (_isCreate) {
-      // Create a new budget entry
-      final newEntry = BudgetEntry(
-        title: title,
+      final newProduct = Product(
+        name: name,
         description: description.isNotEmpty ? description : null,
-        amount: amount,
+        stock: stock,
+        price: price,
       );
-      final request = ModelMutations.create(newEntry);
-      final response = await Amplify.API.mutate(request: request).response;
-      safePrint('Create result: $response');
+      try {
+        final request = ModelMutations.create(newProduct);
+        final response = await Amplify.API.mutate(request: request).response;
+        safePrint('Product created: $response');
+      } catch (e) {
+        safePrint('Creation failed: $e');
+      }
     } else {
-      // Update budgetEntry instead
-      final updateBudgetEntry = _budgetEntry!.copyWith(
-        title: title,
+      final updatedProduct = widget.product!.copyWith(
+        name: name,
         description: description.isNotEmpty ? description : null,
-        amount: amount,
+        stock: stock,
+        price: price,
       );
-      final request = ModelMutations.update(updateBudgetEntry);
-      final response = await Amplify.API.mutate(request: request).response;
-      safePrint('Update result: $response');
+      try {
+        final request = ModelMutations.update(updatedProduct);
+        final response = await Amplify.API.mutate(request: request).response;
+        safePrint('Product updated: $response');
+      } catch (e) {
+        safePrint('Update failed: $e');
+      }
     }
 
-    // Navigate back to homepage after create/update executes
-    if (mounted) {
-      context.pop();
+    if (!mounted) return;
+    context.pop();
+  }
+
+  Future<void> _deleteProduct() async {
+    // Only attempt deletion if a product exists.
+    if (widget.product == null) return;
+
+    try {
+      final request = ModelMutations.delete(widget.product!);
+      final response = await Amplify.API.mutate(request: request).response;
+      if (response.hasErrors) {
+        safePrint('Deletion error: ${response.errors}');
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to delete product')),
+        );
+      } else {
+        safePrint('Product deleted: ${widget.product!.id}');
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Product deleted successfully')),
+        );
+        if (!mounted) return;
+        context.goNamed('product_list');
+      }
+    } catch (e) {
+      safePrint('Deletion failed: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Deletion failed')),
+      );
     }
   }
 
@@ -340,49 +527,59 @@ class _ManageBudgetEntryScreenState extends State<ManageBudgetEntryScreen> {
       body: Align(
         alignment: Alignment.topCenter,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 800),
+          constraints: const BoxConstraints(maxWidth: 600),
           child: Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(16.0),
             child: SingleChildScrollView(
               child: Form(
                 key: _formKey,
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     TextFormField(
-                      controller: _titleController,
-                      decoration: const InputDecoration(
-                        labelText: 'Title (required)',
-                      ),
+                      controller: _nameController,
+                      decoration:
+                          const InputDecoration(labelText: 'Name (required)'),
                       validator: (value) {
                         if (value == null || value.isEmpty) {
-                          return 'Please enter a title';
+                          return 'Please enter product name';
                         }
                         return null;
                       },
                     ),
                     TextFormField(
                       controller: _descriptionController,
-                      decoration: const InputDecoration(
-                        labelText: 'Description',
-                      ),
+                      decoration:
+                          const InputDecoration(labelText: 'Description'),
                     ),
                     TextFormField(
-                      controller: _amountController,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        signed: false,
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'Amount (required)',
-                      ),
+                      controller: _stockController,
+                      keyboardType: TextInputType.number,
+                      decoration:
+                          const InputDecoration(labelText: 'Stock (required)'),
                       validator: (value) {
                         if (value == null || value.isEmpty) {
-                          return 'Please enter an amount';
+                          return 'Enter stock value';
                         }
-                        final amount = double.tryParse(value);
-                        if (amount == null || amount <= 0) {
-                          return 'Please enter a valid amount';
+                        final stock = int.tryParse(value);
+                        if (stock == null || stock < 0) {
+                          return 'Enter valid stock';
+                        }
+                        return null;
+                      },
+                    ),
+                    TextFormField(
+                      controller: _priceController,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration:
+                          const InputDecoration(labelText: 'Price (required)'),
+                      validator: (value) {
+                        if (value == null || value.isEmpty) {
+                          return 'Enter price';
+                        }
+                        final price = double.tryParse(value);
+                        if (price == null || price <= 0) {
+                          return 'Enter valid price';
                         }
                         return null;
                       },
@@ -392,6 +589,17 @@ class _ManageBudgetEntryScreenState extends State<ManageBudgetEntryScreen> {
                       onPressed: submitForm,
                       child: Text(_titleText),
                     ),
+                    // Only show the Delete button if updating an existing product.
+                    if (!_isCreate) ...[
+                      const SizedBox(height: 10),
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                        ),
+                        onPressed: _deleteProduct,
+                        child: const Text('Delete Product'),
+                      ),
+                    ],
                   ],
                 ),
               ),

@@ -1,7 +1,10 @@
-type BudgetEntry @model @auth(rules: [{ allow: owner }]) {
+type Product @model @auth(rules: [
+  { allow: owner },
+  { allow: public, operations: [read] }
+]) {
   id: ID!
-  title: String!
+  name: String!
   description: String
-  amount: Float!
+  stock: Int!
+  price: Float!
 }
-
