@@ -1,12 +1,12 @@
 import 'package:amplify_api/amplify_api.dart';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
-import '../models/cart_model.dart';
-import '../models/ModelProvider.dart';
+import '../services/shopping_cart.dart';
 
 class CartPage extends StatefulWidget {
-  const CartPage({Key? key}) : super(key: key);
+  const CartPage({super.key});
 
   @override
   State<CartPage> createState() => _CartPageState();
@@ -22,7 +22,7 @@ class _CartPageState extends State<CartPage> {
 
     final cartItems = ShoppingCart.instance.getItems();
 
-    // Check if there is enough stock for each item
+    // Check if there is enough stock for each cart item
     for (final item in cartItems) {
       if (item.quantity > item.product.stock) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -35,7 +35,7 @@ class _CartPageState extends State<CartPage> {
       }
     }
 
-    // Deduct ordered quantities and update each product's stock
+    // Deduct the ordered quantity from the product stock and update the product
     for (final item in cartItems) {
       final updatedStock = item.product.stock - item.quantity;
       final updatedProduct = item.product.copyWith(stock: updatedStock);
@@ -45,14 +45,15 @@ class _CartPageState extends State<CartPage> {
         if (response.hasErrors) {
           safePrint('Error updating product: ${response.errors}');
         } else {
-          safePrint('Updated ${item.product.name} stock to $updatedStock');
+          safePrint(
+              'Updated product ${item.product.name} stock to $updatedStock');
         }
       } catch (e) {
         safePrint('Update failed: $e');
       }
     }
 
-    // Clear the cart after placing the order
+    // Clear the cart after a successful order
     ShoppingCart.instance.clear();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Order placed successfully')),
@@ -62,9 +63,9 @@ class _CartPageState extends State<CartPage> {
       _isPlacingOrder = false;
     });
 
-    // Optionally, navigate back
+    // Optionally, navigate back to the product list
     if (mounted) {
-      Navigator.pop(context);
+      context.pop();
     }
   }
 
