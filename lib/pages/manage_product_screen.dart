@@ -1,9 +1,10 @@
-import 'package:amplify_api/amplify_api.dart';
-import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import 'package:amplify_flutter/amplify_flutter.dart';
 
-import '../models/Product.dart';
+import '../bloc/product_bloc.dart';
+import '../models/ModelProvider.dart';
 
 class ManageProductScreen extends StatefulWidget {
   final Product? product;
@@ -46,7 +47,7 @@ class _ManageProductScreenState extends State<ManageProductScreen> {
     super.dispose();
   }
 
-  Future<void> submitForm() async {
+  void _submitForm() {
     if (!_formKey.currentState!.validate()) return;
 
     final name = _nameController.text;
@@ -61,13 +62,7 @@ class _ManageProductScreenState extends State<ManageProductScreen> {
         stock: stock,
         price: price,
       );
-      try {
-        final request = ModelMutations.create(newProduct);
-        final response = await Amplify.API.mutate(request: request).response;
-        safePrint('Product created: $response');
-      } catch (e) {
-        safePrint('Creation failed: $e');
-      }
+      context.read<ProductBloc>().add(CreateProduct(newProduct));
     } else {
       final updatedProduct = widget.product!.copyWith(
         name: name,
@@ -75,130 +70,129 @@ class _ManageProductScreenState extends State<ManageProductScreen> {
         stock: stock,
         price: price,
       );
-      try {
-        final request = ModelMutations.update(updatedProduct);
-        final response = await Amplify.API.mutate(request: request).response;
-        safePrint('Product updated: $response');
-      } catch (e) {
-        safePrint('Update failed: $e');
-      }
+      context.read<ProductBloc>().add(UpdateProduct(updatedProduct));
     }
-
-    if (!mounted) return;
-    context.pop();
   }
 
-  Future<void> _deleteProduct() async {
-    // Only attempt deletion if a product exists.
+  void _deleteProduct() {
     if (widget.product == null) return;
+    context.read<ProductBloc>().add(DeleteProduct(widget.product!));
+  }
 
+  Future<void> _logout() async {
     try {
-      final request = ModelMutations.delete(widget.product!);
-      final response = await Amplify.API.mutate(request: request).response;
-      if (response.hasErrors) {
-        safePrint('Deletion error: ${response.errors}');
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to delete product')),
-        );
-      } else {
-        safePrint('Product deleted: ${widget.product!.id}');
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Product deleted successfully')),
-        );
-        if (!mounted) return;
-        context.goNamed('product_list');
-      }
+      await Amplify.Auth.signOut();
     } catch (e) {
-      safePrint('Deletion failed: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Deletion failed')),
-      );
+      safePrint('Sign out failed: $e');
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_titleText),
-      ),
-      body: Align(
-        alignment: Alignment.topCenter,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 600),
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: SingleChildScrollView(
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  children: [
-                    TextFormField(
-                      controller: _nameController,
-                      decoration:
-                          const InputDecoration(labelText: 'Name (required)'),
-                      validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'Please enter product name';
-                        }
-                        return null;
-                      },
-                    ),
-                    TextFormField(
-                      controller: _descriptionController,
-                      decoration:
-                          const InputDecoration(labelText: 'Description'),
-                    ),
-                    TextFormField(
-                      controller: _stockController,
-                      keyboardType: TextInputType.number,
-                      decoration:
-                          const InputDecoration(labelText: 'Stock (required)'),
-                      validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'Enter stock value';
-                        }
-                        final stock = int.tryParse(value);
-                        if (stock == null || stock < 0) {
-                          return 'Enter valid stock';
-                        }
-                        return null;
-                      },
-                    ),
-                    TextFormField(
-                      controller: _priceController,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      decoration:
-                          const InputDecoration(labelText: 'Price (required)'),
-                      validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'Enter price';
-                        }
-                        final price = double.tryParse(value);
-                        if (price == null || price <= 0) {
-                          return 'Enter valid price';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 20),
-                    ElevatedButton(
-                      onPressed: submitForm,
-                      child: Text(_titleText),
-                    ),
-                    // Only show the Delete button if updating an existing product.
-                    if (!_isCreate) ...[
-                      const SizedBox(height: 10),
-                      ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red,
-                        ),
-                        onPressed: _deleteProduct,
-                        child: const Text('Delete Product'),
+    return BlocListener<ProductBloc, ProductState>(
+      listener: (context, state) {
+        if (state is ProductOperationSuccess) {
+          if (state.operation == OperationType.delete || _isCreate) {
+            // For creation or deletion, navigate to product list.
+            context.goNamed('product_list');
+          } else if (state.operation == OperationType.update) {
+            // For update, simply pop so that the product detail page remains.
+            context.pop();
+          }
+        }
+        if (state is ProductError) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: ${state.message}')),
+          );
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(_titleText),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.logout),
+              onPressed: _logout,
+            ),
+          ],
+        ),
+        body: Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 600),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: SingleChildScrollView(
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    children: [
+                      TextFormField(
+                        controller: _nameController,
+                        decoration:
+                            const InputDecoration(labelText: 'Name (required)'),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter product name';
+                          }
+                          return null;
+                        },
                       ),
+                      TextFormField(
+                        controller: _descriptionController,
+                        decoration:
+                            const InputDecoration(labelText: 'Description'),
+                      ),
+                      TextFormField(
+                        controller: _stockController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                            labelText: 'Stock (required)'),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Enter stock value';
+                          }
+                          final stock = int.tryParse(value);
+                          if (stock == null || stock < 0) {
+                            return 'Enter valid stock';
+                          }
+                          return null;
+                        },
+                      ),
+                      TextFormField(
+                        controller: _priceController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        decoration: const InputDecoration(
+                            labelText: 'Price (required)'),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Enter price';
+                          }
+                          final price = double.tryParse(value);
+                          if (price == null || price <= 0) {
+                            return 'Enter valid price';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 20),
+                      ElevatedButton(
+                        onPressed: _submitForm,
+                        child: Text(_titleText),
+                      ),
+                      if (!_isCreate) ...[
+                        const SizedBox(height: 10),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                          ),
+                          onPressed: _deleteProduct,
+                          child: const Text('Delete Product'),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
               ),
             ),

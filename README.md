@@ -8,7 +8,7 @@ Account creation with email verification
 
 <img src="docs/images/account_creation.png" height="400" />
 
-Product listing with real-time updates
+Product listing
 
 <img src="docs/images/product_list.png" height="400" />
 
@@ -20,7 +20,7 @@ Product update
 
 <img src="docs/images/product_update.png" height="400" />
 
-Shopping cart (in-memory)
+Shopping cart
 
 <img src="docs/images/cart_page.png" height="400" />
 
@@ -65,26 +65,24 @@ The schema defines a Product model with:
 
 ### `/lib` Directory Organization
 
+- `/bloc`: Contains the Flutter Bloc implementation (events, states, and bloc for products)
 - `/config`: Configuration files and constants
-- `/models`: Generated GraphQL model classes
+- `/models`: Generated GraphQL model classes + CartItem model
 - `/pages`: Flutter UI screens and widgets
 - `/router`: Application routing configuration
-- `/services`: Business logic and API service layers
+- `/services`: Business logic and API service layers (ProductRepository, ShoppingCart)
 
 ### Key Features
 
 1. **Authentication**
    - User sign-up and sign-in using Amplify Authenticator
-   - Protected routes and authenticated API calls
+   - Logout button available on every page
 
 2. **Product Management**
    - Create, read, update, and delete products
-   - Product listing with real-time updates
+   - Automatic refresh of product listing, details, and cart after create/update/delete operations
    - Stock and price management
 
-3. **Routing**
-   - Declarative routing using GoRouter
-   - Protected route handling
 
 ## Getting Started
 

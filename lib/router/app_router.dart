@@ -1,4 +1,3 @@
-import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../models/Product.dart';
@@ -7,12 +6,8 @@ import '../pages/product_detail_page.dart';
 import '../pages/cart_page.dart';
 import '../pages/manage_product_screen.dart';
 
-// Global RouteObserver to monitor route changes
-final RouteObserver<PageRoute> routeObserver = RouteObserver<PageRoute>();
-
 class AppRouter {
   static final router = GoRouter(
-    observers: [routeObserver],
     routes: [
       GoRoute(
         path: '/',

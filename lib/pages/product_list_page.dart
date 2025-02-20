@@ -1,75 +1,23 @@
-import 'package:amplify_api/amplify_api.dart';
-import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 
+import '../bloc/product_bloc.dart';
 import '../models/ModelProvider.dart';
-import '../router/app_router.dart';
 import '../services/shopping_cart.dart';
+import 'package:amplify_flutter/amplify_flutter.dart';
 
-class ProductListPage extends StatefulWidget {
+class ProductListPage extends StatelessWidget {
   const ProductListPage({super.key});
 
-  @override
-  State<ProductListPage> createState() => _ProductListPageState();
-}
-
-class _ProductListPageState extends State<ProductListPage> with RouteAware {
-  List<Product> _products = [];
-
-  @override
-  void initState() {
-    super.initState();
-    _refreshProducts();
-  }
-
-  // Subscribe to the route observer when dependencies change.
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final route = ModalRoute.of(context);
-    if (route is PageRoute) {
-      routeObserver.subscribe(this, route);
-    }
-  }
-
-  // Called when this route has been popped back to (i.e. becomes visible).
-  @override
-  void didPopNext() {
-    _refreshProducts();
-  }
-
-  @override
-  void dispose() {
-    routeObserver.unsubscribe(this);
-    super.dispose();
-  }
-
-  Future<void> _refreshProducts() async {
-    try {
-      final request = ModelQueries.list(Product.classType);
-      final response = await Amplify.API.query(request: request).response;
-      if (response.hasErrors) {
-        safePrint('Errors: ${response.errors}');
-        return;
-      }
-      final products = response.data?.items.whereType<Product>().toList() ?? [];
-      setState(() {
-        _products = products;
-      });
-    } catch (e) {
-      safePrint('Query failed: $e');
-    }
-  }
-
-  void _addToCart(Product product) {
+  void _addToCart(BuildContext context, Product product) {
     ShoppingCart.instance.addProduct(product);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('${product.name} added to cart')),
     );
   }
 
-  Widget _buildRow(Product product) {
+  Widget _buildRow(BuildContext context, Product product) {
     return ListTile(
       title: Row(
         children: [
@@ -78,7 +26,7 @@ class _ProductListPageState extends State<ProductListPage> with RouteAware {
           Expanded(child: Text('\$ ${product.price.toStringAsFixed(2)}')),
           IconButton(
             icon: const Icon(Icons.add_shopping_cart),
-            onPressed: () => _addToCart(product),
+            onPressed: () => _addToCart(context, product),
           ),
         ],
       ),
@@ -88,20 +36,30 @@ class _ProductListPageState extends State<ProductListPage> with RouteAware {
     );
   }
 
+  Future<void> _logout(BuildContext context) async {
+    try {
+      await Amplify.Auth.signOut();
+    } catch (e) {
+      safePrint('Sign out failed: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Products'),
         actions: [
-          // Button to navigate to the shopping cart page
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: () => _logout(context),
+          ),
           IconButton(
             icon: const Icon(Icons.shopping_cart),
             onPressed: () => context.pushNamed('cart'),
           ),
         ],
       ),
-      // Floating button for product owners to add new products
       floatingActionButton: FloatingActionButton(
         onPressed: () {
           context.pushNamed('manage_product', extra: null);
@@ -109,13 +67,25 @@ class _ProductListPageState extends State<ProductListPage> with RouteAware {
         child: const Icon(Icons.add),
       ),
       body: RefreshIndicator(
-        onRefresh: _refreshProducts,
-        child: ListView.separated(
-          itemCount: _products.length,
-          separatorBuilder: (context, index) => const Divider(),
-          itemBuilder: (context, index) {
-            final product = _products[index];
-            return _buildRow(product);
+        onRefresh: () async {
+          context.read<ProductBloc>().add(LoadProducts());
+        },
+        child: BlocBuilder<ProductBloc, ProductState>(
+          builder: (context, state) {
+            if (state is ProductLoading) {
+              return const Center(child: CircularProgressIndicator());
+            } else if (state is ProductLoaded) {
+              final products = state.products;
+              return ListView.separated(
+                itemCount: products.length,
+                separatorBuilder: (context, index) => const Divider(),
+                itemBuilder: (context, index) =>
+                    _buildRow(context, products[index]),
+              );
+            } else if (state is ProductError) {
+              return Center(child: Text('Error: ${state.message}'));
+            }
+            return const Center(child: Text('No products available.'));
           },
         ),
       ),
